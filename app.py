@@ -13,7 +13,7 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL,
             category TEXT,
-            price REAL,            currency TEXT DEFAULT '\u20ba',            quantity INTEGER,
+            price REAL,            currency TEXT DEFAULT '₺',            quantity INTEGER,
             unit TEXT DEFAULT 'Adet',
             reorder_level INTEGER DEFAULT 5
         )
@@ -39,7 +39,7 @@ def init_db():
     cols = [r[1] for r in c.fetchall()]
     if 'currency' not in cols:
         try:
-            c.execute("ALTER TABLE products ADD COLUMN currency TEXT DEFAULT '\u20ba'")
+            c.execute("ALTER TABLE products ADD COLUMN currency TEXT DEFAULT '₺'")
         except Exception:
             pass
     if 'unit' not in cols:
@@ -169,6 +169,24 @@ def delete_product(id):
     conn.commit()
     conn.close()
 
+def safe_format_option(value, dataframe, display_cols):
+    """Selectbox için güvenli format fonksiyonu - eksik veri olsa da hata vermez"""
+    try:
+        # Veri türü uyuşmazlığını düzelt
+        value = int(value) if not isinstance(value, int) else value
+        matching = dataframe[dataframe['id'].astype(int) == value]
+        if len(matching) > 0:
+            parts = [f"ID: {value}"]
+            for col in display_cols:
+                if col in matching.columns:
+                    val = matching[col].values[0]
+                    if pd.notna(val):
+                        parts.append(str(val))
+            return " - ".join(parts)
+    except Exception:
+        pass
+    return f"ID: {value}"
+
 def main():
     st.set_page_config(page_title="Stok Takip Programı", layout="wide", page_icon="📦")
     init_db()
@@ -202,8 +220,9 @@ def main():
             st.dataframe(notif_display, use_container_width=True)
 
             # Tekil silme seçeneği
-            sel_id = st.selectbox('Silinecek bildirim', options=notifs_df['id'].tolist(), format_func=lambda x: f"ID: {x} - {notifs_df[notifs_df['id']==x]['product_name'].values[0]} - {notifs_df[notifs_df['id']==x]['created_at'].values[0]}")
+            sel_id = st.number_input('Silinecek Bildirim ID\'si', min_value=1, step=1)
             if st.button('Görüldü olarak sil'):
+                sel_id = int(sel_id)  # ID'yi int yap
                 mark_notification_seen(sel_id)
                 st.success('Bildirim silindi')
                 st.rerun()
@@ -242,7 +261,7 @@ def main():
                 df_val = df.copy()
                 df_val['value'] = df_val['price'] * df_val['quantity']
                 totals = df_val.groupby('currency')['value'].sum().to_dict()
-                tl_total = totals.get('\u20ba', 0.0)
+                tl_total = totals.get('₺', 0.0)
                 usd_total = totals.get('$', 0.0)
                 eur_total = totals.get('€', 0.0)
                 gbp_total = totals.get('£', 0.0)
@@ -283,7 +302,7 @@ def main():
             category = st.selectbox("Kategori", category_list)
         with col2:
             price = st.number_input("Birim Fiyatı", min_value=0.0, format="%.2f")
-            currency = st.selectbox("Para Birimi", ["\u20ba", "$", "€", "£"], index=0)
+            currency = st.selectbox("Para Birimi", ["₺", "$", "€", "£"], index=0)
             # birimi adı girdikten sonra ekrana yaz
             unit_preview = 'Metre' if (name and 'kablo' in name.lower()) else 'Adet'
             quantity = st.number_input(f"Stok Miktarı ({unit_preview})", min_value=0, step=1)
@@ -293,11 +312,14 @@ def main():
             if name.strip() == "":
                 st.warning("⚠️ Ürün adı boş bırakılamaz!")
             else:
-                unit = 'Metre' if 'kablo' in name.lower() else 'Adet'
-                add_product(name, category, price, currency, quantity, unit, int(reorder_level))
-                st.toast(f"✅ '{name}' başarıyla stoklara eklendi! ({unit} {currency})", icon="🎉")
-                st.success(f"✅ '{name}' başarıyla stoklara eklendi!")
-                time.sleep(2)
+                try:
+                    unit = 'Metre' if 'kablo' in name.lower() else 'Adet'
+                    add_product(name, category, price, currency, quantity, unit, int(reorder_level))
+                    st.toast(f"✅ '{name}' başarıyla stoklara eklendi! ({unit} {currency})", icon="🎉")
+                    st.success(f"✅ '{name}' başarıyla stoklara eklendi!")
+                    time.sleep(2)
+                except Exception as e:
+                    st.error(f"Ürün eklenirken hata oluştu: {e}")
 
     elif choice == "Ürünleri Yönet (Düzenle/Sil)":
         st.subheader("⚙️ Ürünleri Yönet")
@@ -311,15 +333,21 @@ def main():
                 df,
                 use_container_width=True,
                 hide_index=True,
-                key="data_editor",
-                num_rows="dynamic"  # Satır ekleme veya silmeye izin verebilir (opsiyonel)
+                key="data_editor"
             )
 
             # Değişiklikleri Kaydet
             if st.button("💾 Değişiklikleri Kaydet"):
                 try:
                     conn = sqlite3.connect('stok.db')
-                    edited_df.to_sql('products', conn, if_exists='replace', index=False)
+                    c = conn.cursor()
+                    for index, row in edited_df.iterrows():
+                        c.execute('''
+                            UPDATE products 
+                            SET name=?, category=?, price=?, currency=?, quantity=?, unit=?, reorder_level=?
+                            WHERE id=?
+                        ''', (row['name'], row['category'], row['price'], row['currency'], row['quantity'], row['unit'], row['reorder_level'], row['id']))
+                    conn.commit()
                     conn.close()
                     st.success("✅ Tüm değişiklikler başarıyla kaydedildi!")
                     st.rerun()
@@ -328,31 +356,42 @@ def main():
                 
             st.divider()
             
+            # Verileri yeniden çek (değişiklikleri senkronize etmek için)
+            df = get_data()
+            
             # Tekil silme işlemi için ayrı bir form
             st.subheader("🗑️ Ürün Sil")
             with st.form(key="delete_form"):
-                delete_id = st.selectbox(
-                    "Silinecek Ürünü Seçin", 
-                    df['id'].tolist(), 
-                    format_func=lambda x: f"ID: {x} - {df[df['id']==x]['name'].values[0]}"
+                df = get_data()  # Güncel veriyi çek
+                
+                delete_id = st.number_input(
+                    "Silinecek Ürün ID'si", 
+                    min_value=1, 
+                    step=1
                 )
                 delete_button = st.form_submit_button("❌ Seçili Ürünü Sil")
                 if delete_button:
-                    deleted_name = df[df['id']==delete_id]['name'].values[0]
-                    delete_product(delete_id)
-                    st.toast(f"🗑️ '{deleted_name}' başarıyla silindi!", icon="🗑️")
-                    st.success("✅ Ürün silindi!")
-                    time.sleep(0.5)
-                    st.rerun()
+                    try:
+                        delete_id = int(delete_id)  # ID'yi int yap
+                        deleted_name = df[df['id']==delete_id]['name'].values[0]
+                        delete_product(delete_id)
+                        st.toast(f"🗑️ '{deleted_name}' başarıyla silindi!", icon="🗑️")
+                        st.success("✅ Ürün silindi!")
+                        time.sleep(0.5)
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Ürün silinirken hata oluştu: {e}")
             st.divider()
             st.subheader("📦 Stok İşlemleri")
             with st.form(key="adjust_form"):
-                adj_id = st.selectbox(
-                    "Ürün Seç", 
-                    df['id'].tolist(),
-                    format_func=lambda x: f"ID: {x} - {df[df['id']==x]['name'].values[0]}"
+                df = get_data()  # Güncel veriyi çek
+                
+                adj_id = st.number_input(
+                    "Ürün ID'si", 
+                    min_value=1, 
+                    step=1
                 )
-                operation = st.selectbox("İşlem", ["Ekle", "Çıkar"]) 
+                operation = st.selectbox("İşlem", ["Ekle", "Çıkar"])
                 # seçilen ürünün birimini al
                 selected_unit = 'Adet'
                 try:
@@ -366,18 +405,22 @@ def main():
                 adj_amount = st.number_input(f"Miktar ({selected_unit})", min_value=1, step=1)
                 adj_submit = st.form_submit_button("Uygula")
                 if adj_submit:
-                    if operation == "Çıkar":
-                        ok, res = decrement_stock(adj_id, int(adj_amount))
-                        msg = f"✅ Stoğunuz güncellendi. Yeni miktar: {res} {selected_unit}"
-                    else:
-                        ok, res = add_stock(adj_id, int(adj_amount))
-                        msg = f"✅ Stoğunuz güncellendi. Yeni miktar: {res} {selected_unit}"
-                    if ok:
-                        st.success(msg)
-                        time.sleep(2)
-                        st.rerun()
-                    else:
-                        st.error(f"Hata: {res}")
+                    try:
+                        adj_id = int(adj_id)  # ID'yi int yap
+                        if operation == "Çıkar":
+                            ok, res = decrement_stock(adj_id, int(adj_amount))
+                            msg = f"✅ Stoğunuz güncellendi. Yeni miktar: {res} {selected_unit}"
+                        else:
+                            ok, res = add_stock(adj_id, int(adj_amount))
+                            msg = f"✅ Stoğunuz güncellendi. Yeni miktar: {res} {selected_unit}"
+                        if ok:
+                            st.success(msg)
+                            time.sleep(2)
+                            st.rerun()
+                        else:
+                            st.error(f"Hata: {res}")
+                    except Exception as e:
+                        st.error(f"Stok işlemi sırasında hata oluştu: {e}")
         else:
             st.info("Yönetilecek ürün bulunmamaktadır.")
 
