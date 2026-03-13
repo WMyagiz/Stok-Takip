@@ -342,11 +342,53 @@ def main():
                     conn = sqlite3.connect('stok.db')
                     c = conn.cursor()
                     for index, row in edited_df.iterrows():
+                        raw_id = row.get('id')
+                        if pd.isna(raw_id):
+                            continue
+                        try:
+                            pid = int(raw_id)
+                        except Exception:
+                            continue
+
+                        name = row.get('name')
+                        category = row.get('category')
+                        price = row.get('price')
+                        currency = row.get('currency')
+                        quantity = row.get('quantity')
+                        unit = row.get('unit')
+                        reorder_level = row.get('reorder_level')
+
+                        # Normalize types and treat empty values as NULL
+                        if pd.isna(name):
+                            name = None
+                        if pd.isna(category):
+                            category = None
+                        if pd.isna(price):
+                            price = None
+                        if pd.isna(currency):
+                            currency = None
+                        if pd.isna(quantity):
+                            quantity = None
+                        else:
+                            try:
+                                quantity = int(quantity)
+                            except Exception:
+                                quantity = None
+                        if pd.isna(unit):
+                            unit = None
+                        if pd.isna(reorder_level):
+                            reorder_level = None
+                        else:
+                            try:
+                                reorder_level = int(reorder_level)
+                            except Exception:
+                                reorder_level = None
+
                         c.execute('''
                             UPDATE products 
                             SET name=?, category=?, price=?, currency=?, quantity=?, unit=?, reorder_level=?
                             WHERE id=?
-                        ''', (row['name'], row['category'], row['price'], row['currency'], row['quantity'], row['unit'], row['reorder_level'], row['id']))
+                        ''', (name, category, price, currency, quantity, unit, reorder_level, pid))
                     conn.commit()
                     conn.close()
                     st.success("✅ Tüm değişiklikler başarıyla kaydedildi!")
