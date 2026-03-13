@@ -193,6 +193,10 @@ def main():
     # Düşük stokları kontrol et ve bildirim oluştur
     check_low_stock()
 
+    # Session state for menu choice
+    if 'menu_choice' not in st.session_state:
+        st.session_state.menu_choice = "Gösterge Paneli (Dashboard)"
+
     # Emoji imleç
     emoji_cursor = '''<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 100 100">
         <text x="50" y="50" font-size="80" text-anchor="middle" dominant-baseline="central">📦</text>
@@ -236,7 +240,7 @@ def main():
     st.title("📦 Stok Takip Programı")
 
     menu = ["Gösterge Paneli (Dashboard)", "Ürün Ekle", "Ürünleri Yönet (Düzenle/Sil)"]
-    choice = st.sidebar.selectbox("Menü", menu)
+    choice = st.sidebar.selectbox("Menü", menu, index=menu.index(st.session_state.menu_choice), key='menu_choice')
 
     if choice == "Gösterge Paneli (Dashboard)":
         st.subheader("📊 Genel Bakış")
@@ -392,6 +396,7 @@ def main():
                     conn.commit()
                     conn.close()
                     st.success("✅ Tüm değişiklikler başarıyla kaydedildi!")
+                    st.session_state.menu_choice = "Gösterge Paneli (Dashboard)"
                     st.rerun()
                 except Exception as e:
                     st.error(f"Hata oluştu: {e}")
